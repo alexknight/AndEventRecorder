@@ -1,26 +1,37 @@
 # coding:utf-8
 import os
 import threading
+import sys
+
+import subprocess
 
 import time
 
-import sys
-
 from eventparser import EventParser
+from watcher import monitor_change
 
-origin_event_file = os.path.join(os.getcwd(), "event.txt")
-parser_event_file = os.path.join(os.getcwd(), "event.sh")
+origin_event_file = os.path.join(os.getcwd(), "events.txt")
+parser_event_file = os.path.join(os.getcwd(), "events.sh")
 
 STOP_FLAG = False
+PID = None
 
 
 def record_daemon():
-    shell_command("adb shell getevent -t > " + origin_event_file)
+    shell_command("/home/alex/Android/Sdk/platform-tools/adb shell getevent -t > " + origin_event_file)
 
 
-def shell_command(cmd):
+def shell_command(cmd, result=False):
     print "cur cmd ==> " + cmd
-    os.system(cmd)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, stderr=subprocess.STDOUT)
+    global PID
+    PID = p.pid
+    while True:
+        buff = p.stdout.readline()
+        if buff == '' and p.poll() != None:
+            break
+        elif result is True:
+            return buff
 
 
 def prepare():
@@ -29,12 +40,8 @@ def prepare():
     if os.path.isfile(parser_event_file):
         os.remove(parser_event_file)
     shell_command("adb logcat -c")
-    shell_command("adb logcat -d > log/install.log")
+    # shell_command("adb logcat -d > log/install.log")
     print "clear all log file."
-
-
-def monitor_events():
-    pass
 
 
 def main():
@@ -43,12 +50,34 @@ def main():
         t = threading.Thread(target=record_daemon, args=())
         t.setDaemon(True)
         t.start()
-
+        time.sleep(3)
+        start = time.time()
+        monitor_change(origin_event_file)  # block job
+        print "cost " + str(time.time() - start)
+        if PID is not None:
+            os.killpg(PID, 9)
+        
+        # parser result to sh scripts
         event_parser = EventParser(origin_event_file)
         event_parser.get_events().save(parser_event_file)
+
     elif sys.argv[1] == "play":
         shell_command("/usr/bin/sh " + parser_event_file)
 
 
 if __name__ == '__main__':
-    main()
+    prepare()
+    t = threading.Thread(target=record_daemon, args=())
+    t.setDaemon(True)
+    t.start()
+    time.sleep(2)
+    start = time.time()
+    monitor_change(origin_event_file)  # block job
+    print "cost " + str(time.time() - start)
+    if PID is not None:
+        os.kill(PID, 9)
+        shell_command('ps -ef | grep "getevent" | grep -v "grep" | cut -c 9-15 | xargs kill -9')
+
+    # parser result to sh scripts
+    event_parser = EventParser(origin_event_file)
+    event_parser.get_events().save(parser_event_file)
